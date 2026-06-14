@@ -1,0 +1,10 @@
+{
+  "name": "Remix: Remix: AMT Connect",
+  "description": "Aircraft Maintenance Training Room Booking \u0026 Equipment Borrowing-Returning System connected with Google Sheets",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
