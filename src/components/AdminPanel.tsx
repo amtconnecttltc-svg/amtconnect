@@ -4,11 +4,11 @@
  */
 
 import React, { useState } from 'react';
-import { User, RoomRequest, RoomUsageRecord, BorrowRecord } from '../types';
+import { User, RoomRequest, RoomUsageRecord, BorrowRecord, Equipment, ClassSchedule } from '../types';
 import { 
   Users, UserCheck, ShieldAlert, CheckCircle, XCircle, 
   Plus, Printer, Key, Eye, ToggleLeft, ToggleRight, Settings, Info,
-  Camera, QrCode, Search, Award, BookOpen, RefreshCw, Wrench
+  Camera, QrCode, Search, Award, BookOpen, RefreshCw, Wrench, Edit2, Trash2, Calendar, FileText
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
@@ -18,6 +18,7 @@ import {
   saveGoogleScriptUrl,
   syncWithGoogleSheets,
   pullFromGoogleSheets,
+  mergeDatabases,
   DEFAULT_GOOGLE_SCRIPT_URL,
   APIService
 } from '../lib/api';
@@ -28,6 +29,8 @@ interface AdminPanelProps {
   roomRequests: RoomRequest[];
   roomUsageRecords: RoomUsageRecord[];
   borrowRecords: BorrowRecord[];
+  equipment: Equipment[];
+  schedules: ClassSchedule[];
   onApproveUser: (userId: string) => void;
   onRejectUser: (userId: string) => void;
   onUpdateUserStatus: (userId: string, newStatus: User['status']) => void;
@@ -36,6 +39,13 @@ interface AdminPanelProps {
   onViewRequestDoc: (req: RoomRequest) => void;
   onPrintUsageRecords: () => void;
   onReloadDb?: () => void;
+  onAddUser?: (newUser: User) => void;
+  onUpdateUser?: (updatedUser: User) => void;
+  onDeleteUser?: (userId: string) => void;
+  onAddEquipment?: (eq: Equipment) => void;
+  onDeleteEquipment?: (code: string) => void;
+  onAddSchedule?: (sch: ClassSchedule) => void;
+  onDeleteSchedule?: (id: string) => void;
 }
 
 export default function AdminPanel({
@@ -43,6 +53,8 @@ export default function AdminPanel({
   roomRequests,
   roomUsageRecords,
   borrowRecords,
+  equipment = [],
+  schedules = [],
   onApproveUser,
   onRejectUser,
   onUpdateUserStatus,
@@ -50,13 +62,53 @@ export default function AdminPanel({
   onViewStudentCard,
   onViewRequestDoc,
   onPrintUsageRecords,
-  onReloadDb
+  onReloadDb,
+  onAddUser,
+  onUpdateUser,
+  onDeleteUser,
+  onAddEquipment,
+  onDeleteEquipment,
+  onAddSchedule,
+  onDeleteSchedule
 }: AdminPanelProps) {
-  const [subTab, setSubTab] = useState<'users' | 'rooms' | 'records' | 'verify'>('users');
+  const [subTab, setSubTab] = useState<'users' | 'rooms' | 'records' | 'verify' | 'equipment' | 'schedules'>('users');
   const [filterBatch, setFilterBatch] = useState<string>('All');
   const [showTraceabilityDoc, setShowTraceabilityDoc] = useState(false);
   const [sheetsUrl, setSheetsUrl] = useState<string>(getGoogleScriptUrl());
   const [showSheetsConfig, setShowSheetsConfig] = useState(false);
+
+  // --- Dynamic Admin Forms States ---
+  const [showAddUserForm, setShowAddUserForm] = useState(false);
+  const [newUserId, setNewUserId] = useState('');
+  const [newUserFirstName, setNewUserFirstName] = useState('');
+  const [newUserLastName, setNewUserLastName] = useState('');
+  const [newUserRole, setNewUserRole] = useState<User['role']>('นักศึกษา');
+  const [newUserBatch, setNewUserBatch] = useState('');
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [newUserStatus, setNewUserStatus] = useState<User['status']>('Active');
+
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+
+  // Equipment Form states
+  const [showAddEquipmentForm, setShowAddEquipmentForm] = useState(false);
+  const [newEqName, setNewEqName] = useState('');
+  const [newEqPart, setNewEqPart] = useState('');
+  const [newEqSerial, setNewEqSerial] = useState('');
+  const [newEqCode, setNewEqCode] = useState('');
+  const [newEqQty, setNewEqQty] = useState(1);
+  const [newEqLocation, setNewEqLocation] = useState('Workspace 1');
+  const [newEqRemark, setNewEqRemark] = useState('');
+
+  // Class Schedule Form states
+  const [showAddScheduleForm, setShowAddScheduleForm] = useState(false);
+  const [newSchBatch, setNewSchBatch] = useState('');
+  const [newSchSubjCode, setNewSchSubjCode] = useState('');
+  const [newSchSubjName, setNewSchSubjName] = useState('');
+  const [newSchInstructor, setNewSchInstructor] = useState('');
+  const [newSchDay, setNewSchDay] = useState<ClassSchedule['dayOfWeek']>('จันทร์');
+  const [newSchStart, setNewSchStart] = useState('08:30');
+  const [newSchEnd, setNewSchEnd] = useState('16:30');
 
   // Verify Student state
   const [verifySearchId, setVerifySearchId] = useState('');
@@ -452,16 +504,7 @@ export default function AdminPanel({
 
                   if (fetchedData && typeof fetchedData === 'object') {
                     const currentDb = APIService.getDb();
-                    const mergedDb = {
-                      users: fetchedData.users || currentDb.users,
-                      roomRequests: fetchedData.roomRequests || currentDb.roomRequests,
-                      roomUsageRecords: fetchedData.roomUsageRecords || currentDb.roomUsageRecords,
-                      equipment: fetchedData.equipment || currentDb.equipment,
-                      borrowRecords: fetchedData.borrowRecords || currentDb.borrowRecords,
-                      schedules: fetchedData.schedules || currentDb.schedules,
-                      examSchedules: fetchedData.examSchedules || currentDb.examSchedules,
-                      examGrades: fetchedData.examGrades || currentDb.examGrades,
-                    };
+                    const mergedDb = mergeDatabases(currentDb, fetchedData);
                     
                     APIService.saveDb(mergedDb);
                     if (onReloadDb) {
@@ -502,8 +545,8 @@ export default function AdminPanel({
         <button
           id="adminUsersTabBtn"
           onClick={() => setSubTab('users')}
-          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-all cursor-pointer whitespace-nowrap ${
-            subTab === 'users' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-colors cursor-pointer whitespace-nowrap ${
+            subTab === 'users' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-905 hover:bg-slate-50'
           }`}
         >
           จัดสิทธิ์และรายชื่อคนเข้าใช้
@@ -511,8 +554,8 @@ export default function AdminPanel({
         <button
           id="adminRoomsTabBtn"
           onClick={() => setSubTab('rooms')}
-          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-all cursor-pointer whitespace-nowrap ${
-            subTab === 'rooms' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-colors cursor-pointer whitespace-nowrap ${
+            subTab === 'rooms' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-905 hover:bg-slate-50'
           }`}
         >
           ตรวจสอบสถานะห้องพักวันนี้
@@ -520,17 +563,35 @@ export default function AdminPanel({
         <button
           id="adminRecordsTabBtn"
           onClick={() => setSubTab('records')}
-          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-all cursor-pointer whitespace-nowrap ${
-            subTab === 'records' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-colors cursor-pointer whitespace-nowrap ${
+            subTab === 'records' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-905 hover:bg-slate-50'
           }`}
         >
           เอกสารทั้งหมด
         </button>
         <button
+          id="adminEquipmentTabBtn"
+          onClick={() => setSubTab('equipment')}
+          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-colors cursor-pointer whitespace-nowrap ${
+            subTab === 'equipment' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-905 hover:bg-slate-50'
+          }`}
+        >
+          คลังเครื่องมือช่างอากาศยาน
+        </button>
+        <button
+          id="adminSchedulesTabBtn"
+          onClick={() => setSubTab('schedules')}
+          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-colors cursor-pointer whitespace-nowrap ${
+            subTab === 'schedules' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-905 hover:bg-slate-50'
+          }`}
+        >
+          วิชาเรียนและตารางสอบ
+        </button>
+        <button
           id="adminVerifyTabBtn"
           onClick={() => setSubTab('verify')}
-          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-all cursor-pointer whitespace-nowrap ${
-            subTab === 'verify' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-lg font-sans font-bold text-center text-xs transition-colors cursor-pointer whitespace-nowrap ${
+            subTab === 'verify' ? 'bg-[#0F172A] text-white shadow-xs' : 'text-slate-500 hover:text-slate-905 hover:bg-slate-50'
           }`}
         >
           สแกนกล้องตรวจสอบสิทธิ์
@@ -540,20 +601,325 @@ export default function AdminPanel({
       {/* Subtab content 1: USERS */}
       {subTab === 'users' && (
         <div className="space-y-6">
+          {/* Admin Command bar */}
+          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-left">
+            <div>
+              <h3 className="font-sans font-extrabold text-xs text-slate-900 flex items-center gap-2">
+                <Users size={14} className="text-[#0F172A]" />
+                <span>แผงควบคุมสิทธิ์ผู้ใช้งาน AMT Connect ทั้งหมด</span>
+              </h3>
+              <p className="text-[10px] text-slate-500 mt-0.5">คุณสามารถเพิ่มรายชื่อเข้าสู่ระบบได้ทันที แก้ไขประวัติ หรือลบผู้ใช้รายบุคคลออกเพื่อบำรุงรักษาสิทธิ์ของสถาบัน</p>
+            </div>
+            <button
+              onClick={() => {
+                setShowAddUserForm(!showAddUserForm);
+                setEditingUser(null);
+              }}
+              className="flex items-center gap-1 bg-slate-900 hover:bg-slate-805 text-white font-sans text-[10px] font-bold px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-95 shadow-xs"
+            >
+              <Plus size={12} />
+              <span>เพิ่มผู้ใช้ใหม่โดยตรง</span>
+            </button>
+          </div>
+
+          {/* New User Addition Form Card */}
+          {showAddUserForm && (
+            <div className="bg-slate-50 p-5 rounded-xl border border-slate-300 shadow-sm animate-fade-in space-y-4 text-left">
+              <h4 className="font-extrabold text-xs text-slate-905 uppercase tracking-wider font-mono">➕ เพิ่มสิทธิ์ผู้ใช้ใหม่เข้าฐานข้อมูลโดยตรง (Internal Direct Registration)</h4>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">รหัสประจำตัว (User ID) *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น 67010214 หรือ STAFF99"
+                    value={newUserId}
+                    onChange={(e) => setNewUserId(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">ชื่อจริง (First Name) *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="ป้อนชื่อจริง"
+                    value={newUserFirstName}
+                    onChange={(e) => setNewUserFirstName(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">นามสกุล (Last Name) *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="ป้อนนามสกุล"
+                    value={newUserLastName}
+                    onChange={(e) => setNewUserLastName(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">ตำแหน่งหน้าที่ (System Role) *</label>
+                  <select
+                    value={newUserRole}
+                    onChange={(e) => setNewUserRole(e.target.value as any)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-sans cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  >
+                    <option value="นักศึกษา">นักศึกษา</option>
+                    <option value="Admin">Admin (ผู้ดูแลระบบหลัก)</option>
+                    <option value="Training Manager">Training Manager (ผู้บริหารแผนกฝึกอบรม)</option>
+                    <option value="Training Staff">Training Staff (เจ้าหน้าที่ฝึกอบรม)</option>
+                    <option value="Maintenance Manager">Maintenance Manager (ผู้ดูแลโรงงานและเครื่องมือ)</option>
+                    <option value="Maintenance Staff">Maintenance Staff (ช่างเทคนิค/เจ้าหน้าที่โรงงาน)</option>
+                    <option value="Examination Manager">Examination Manager (ผู้ควบคุมการทดสอบ)</option>
+                    <option value="Examination Staff">Examination Staff (เจ้าหน้าที่การสอบ)</option>
+                    <option value="Office Manager">Office Manager (หัวหน้ากองธุรการ)</option>
+                    <option value="Office Staff">Office Staff (เจ้าหน้าที่สารบรรณ)</option>
+                  </select>
+                </div>
+                {newUserRole === 'นักศึกษา' && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-1">รุ่นนักศึกษา (Batch) *</label>
+                    <input
+                      type="text"
+                      required={newUserRole === 'นักศึกษา'}
+                      placeholder="เช่น 67"
+                      value={newUserBatch}
+                      onChange={(e) => setNewUserBatch(e.target.value)}
+                      className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-slate-900"
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">อีเมลผู้ใช้งาน (Email)</label>
+                  <input
+                    type="email"
+                    placeholder="user@example.com"
+                    value={newUserEmail}
+                    onChange={(e) => setNewUserEmail(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">รหัสผ่านสำหรับเข้าสู่ระบบ *</label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="ระบุรหัสผ่านเข้าเล่นระบบ"
+                    value={newUserPassword}
+                    onChange={(e) => setNewUserPassword(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">สถานะแรกเริ่ม (Status)</label>
+                  <select
+                    value={newUserStatus}
+                    onChange={(e) => setNewUserStatus(e.target.value as any)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-sans cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  >
+                    <option value="Active">Active (อนุมัติทันที)</option>
+                    <option value="Pending">Pending (รอตรวจสอบ)</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddUserForm(false)}
+                  className="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                >
+                  ยกเลิกคำร้อง
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newUserId.trim() || !newUserFirstName.trim() || !newUserLastName.trim() || !newUserPassword.trim()) {
+                      Swal.fire('ข้อมูลไม่ครบถ้วน', 'ต้องกรอกรหัสประจำตัว ชื่อจริง นามสกุล และรหัสผ่านสะสมความปลอดภัยให้เรียบร้อย', 'warning');
+                      return;
+                    }
+                    if (onAddUser) {
+                      onAddUser({
+                        id: newUserId.trim().toUpperCase(),
+                        firstName: newUserFirstName.trim(),
+                        lastName: newUserLastName.trim(),
+                        email: newUserEmail.trim() || `${newUserId.toLowerCase()}@amtconnect.com`,
+                        password: newUserPassword,
+                        role: newUserRole,
+                        batch: newUserRole === 'นักศึกษา' ? newUserBatch.trim() : undefined,
+                        photoUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop',
+                        signature: `DRAFT_USER_SIGN_${newUserId}`,
+                        status: newUserStatus,
+                        createdAt: new Date().toLocaleDateString('th-TH'),
+                      });
+                      // Clear values
+                      setNewUserId('');
+                      setNewUserFirstName('');
+                      setNewUserLastName('');
+                      setNewUserEmail('');
+                      setNewUserPassword('');
+                      setNewUserBatch('');
+                      setShowAddUserForm(false);
+                      Swal.fire({
+                        icon: 'success',
+                        title: 'เพิ่มผู้ใช้สำเร็จ',
+                        text: 'รักษาสิทธิ์เรียบร้อย สามารถใช้เป็นสมาคมพิจารณาต่อไป',
+                        timer: 1500,
+                        showConfirmButton: false
+                      });
+                    }
+                  }}
+                  className="px-4 py-1.5 bg-slate-950 text-white hover:bg-slate-800 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                >
+                  เพิ่มเข้าสู่คลังฐานข้อมูล
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* User Editor Dialog Inline Block */}
+          {editingUser && (
+            <div className="bg-amber-50 p-5 rounded-xl border border-amber-300 shadow-sm animate-fade-in space-y-4 text-left text-slate-900">
+              <div className="flex justify-between items-center">
+                <h4 className="font-extrabold text-xs text-amber-900 uppercase tracking-wider font-mono">✍️ แก้ไข/ปรับเปลี่ยนประวัติ และสิทธิ์เข้าใช้งาน: ID: {editingUser.id}</h4>
+                <button onClick={() => setEditingUser(null)} className="text-amber-700 hover:text-amber-905 font-bold font-sans cursor-pointer text-xs">ปิด</button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-amber-800 mb-1">ชื่อจริง (First Name) *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingUser.firstName}
+                    onChange={(e) => setEditingUser({ ...editingUser, firstName: e.target.value })}
+                    className="w-full border border-amber-300 px-3 py-1.5 rounded bg-white text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-amber-800 mb-1">นามสกุล (Last Name) *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingUser.lastName}
+                    onChange={(e) => setEditingUser({ ...editingUser, lastName: e.target.value })}
+                    className="w-full border border-amber-300 px-3 py-1.5 rounded bg-white text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-amber-800 mb-1">ตำแหน่งหน้าที่ (System Role)</label>
+                  <select
+                    value={editingUser.role}
+                    onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value as any })}
+                    className="w-full border border-amber-300 px-3 py-1.5 rounded bg-white text-slate-905 font-sans cursor-pointer"
+                  >
+                    <option value="นักศึกษา">นักศึกษา</option>
+                    <option value="Admin">Admin (ผู้ดูแลระบบหลัก)</option>
+                    <option value="Training Manager">Training Manager (ผู้บริหารแผนกฝึกอบรม)</option>
+                    <option value="Training Staff">Training Staff (เจ้าหน้าที่ฝึกอบรม)</option>
+                    <option value="Maintenance Manager">Maintenance Manager (ผู้ดูแลโรงงานและเครื่องมือ)</option>
+                    <option value="Maintenance Staff">Maintenance Staff (ช่างเทคนิค/เจ้าหน้าที่โรงงาน)</option>
+                    <option value="Examination Manager">Examination Manager (ผู้ควบคุมการทดสอบ)</option>
+                    <option value="Examination Staff">Examination Staff (เจ้าหน้าที่การสอบ)</option>
+                    <option value="Office Manager">Office Manager (หัวหน้ากองธุรการ)</option>
+                    <option value="Office Staff">Office Staff (เจ้าหน้าที่สารบรรณ)</option>
+                  </select>
+                </div>
+                {editingUser.role === 'นักศึกษา' && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-amber-800 mb-1">รุ่นนักศึกษา (Batch) *</label>
+                    <input
+                      type="text"
+                      required={editingUser.role === 'นักศึกษา'}
+                      value={editingUser.batch || ''}
+                      onChange={(e) => setEditingUser({ ...editingUser, batch: e.target.value })}
+                      className="w-full border border-amber-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono"
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-[10px] font-bold text-amber-800 mb-1">อีเมลสะสมบันทึก (Email)</label>
+                  <input
+                    type="email"
+                    value={editingUser.email}
+                    onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })}
+                    className="w-full border border-amber-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-amber-800 mb-1">รหัสผ่านความปลอดภัย *</label>
+                  <input
+                    type="password"
+                    required
+                    value={editingUser.password || ''}
+                    onChange={(e) => setEditingUser({ ...editingUser, password: e.target.value })}
+                    className="w-full border border-amber-300 px-3 py-1.5 rounded bg-white text-slate-905 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-amber-800 mb-1">สถานะสิทธิ์ในระบบ (Status)</label>
+                  <select
+                    value={editingUser.status}
+                    onChange={(e) => setEditingUser({ ...editingUser, status: e.target.value as any })}
+                    className="w-full border border-amber-300 px-3 py-1.5 rounded bg-white text-slate-950 font-sans cursor-pointer"
+                  >
+                    <option value="Pending">Pending (รออนุมัติ)</option>
+                    <option value="Active">Active (พร้อมใช้สิทธิ์)</option>
+                    <option value="พ้นสภาพ">พ้นสภาพ</option>
+                    <option value="พักการเรียน">พักการเรียน</option>
+                    <option value="จบการศึกษา">จบการศึกษา</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingUser(null)}
+                  className="px-3 py-1.5 border border-amber-300 hover:bg-stone-100 text-slate-700 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                >
+                  ยกเลิกการแก้ไข
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!editingUser.firstName.trim() || !editingUser.lastName.trim()) {
+                      Swal.fire('ป้อนข้อมูลไม่ครบ', 'ชื่อเสียงเรียงนามจะต้องมีตัวอักษร', 'warning');
+                      return;
+                    }
+                    if (onUpdateUser) {
+                      onUpdateUser(editingUser);
+                      setEditingUser(null);
+                      Swal.fire({
+                        icon: 'success',
+                        title: 'ปรับปรุงชื่อเสียงเสร็จสิ้น',
+                        timer: 1000,
+                        showConfirmButton: false
+                      });
+                    }
+                  }}
+                  className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                >
+                  บันทึกความเปลี่ยนแปลงสิทธิ์
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Section: Pending request queues */}
           {pendingUsers.length > 0 && (
-            <div className="bg-neutral-50 border-2 border-neutral-950 rounded-lg p-4 shadow-sm">
-              <h3 className="font-sans font-extrabold text-xs text-neutral-950 flex items-center gap-2 mb-3">
-                <ShieldAlert className="text-neutral-950 animate-pulse" size={16} />
-                <span>คำขอสิทธิ์เชื่อมต่อระบบความรักษาความปลอดภัย (ค้างอนุมัติ)</span>
+            <div className="bg-neutral-50 border border-neutral-350 rounded-xl p-4 shadow-3xs text-left">
+              <h3 className="font-sans font-extrabold text-xs text-neutral-900 flex items-center gap-2 mb-3">
+                <ShieldAlert className="text-red-500 animate-pulse" size={14} />
+                <span>คำขออนุมัติสิทธิ์เชื่อมต่อความปลอดภัย (ค้างอนุมัติ {pendingUsers.length} คำขอ)</span>
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {pendingUsers.map(pUser => (
-                  <div key={pUser.id} className="bg-white border border-neutral-300 p-3 rounded flex items-center justify-between gap-3 shadow-inner">
+                  <div key={pUser.id} className="bg-white border border-neutral-300 p-3 rounded-lg flex items-center justify-between gap-3 shadow-3xs">
                     <div className="flex items-center gap-3">
                       <img src={pUser.photoUrl} alt="avatar" className="w-10 h-12 object-cover border border-neutral-300 rounded" referrerPolicy="no-referrer" />
                       <div>
-                        <p className="font-sans font-bold text-neutral-950">{pUser.firstName} {pUser.lastName}</p>
+                        <p className="font-sans font-bold text-neutral-900">{pUser.firstName} {pUser.lastName}</p>
                         <p className="text-[10px] font-mono font-bold text-neutral-500 uppercase">{pUser.role} | ID: {pUser.id}</p>
                         <p className="text-[9px] text-neutral-400 truncate">{pUser.email}</p>
                       </div>
@@ -563,7 +929,7 @@ export default function AdminPanel({
                         <button
                           type="button"
                           onClick={() => onRejectUser(pUser.id)}
-                          className="p-1 px-2 border border-rose-300 text-rose-700 bg-rose-50 hover:bg-rose-100 rounded text-[10px] font-sans font-bold transition-colors cursor-pointer"
+                          className="p-1 px-2 border border-rose-350 text-rose-705 bg-rose-50 hover:bg-rose-100 rounded text-[10px] font-sans font-bold transition-colors cursor-pointer"
                         >
                           ปฏิเสธ
                         </button>
@@ -575,7 +941,7 @@ export default function AdminPanel({
                           อนุมัติสิทธิ์
                         </button>
                       </div>
-                      <span className="text-[8px] text-emerald-600 font-sans font-bold">✓ อนุญาตสิทธิ์ผู้ดูแลระบบ</span>
+                      <span className="text-[8px] text-emerald-600 font-sans font-bold">✓ สมาชิกเตรียมเข้าคลัง</span>
                     </div>
                   </div>
                 ))}
@@ -584,23 +950,23 @@ export default function AdminPanel({
           )}
 
           {/* List of Registered Students & Teachers */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-left">
             
             {/* STUDENTS LIST */}
-            <div className="bg-white border border-neutral-300 rounded-lg p-4 shadow-sm">
+            <div className="bg-white border border-neutral-250 rounded-xl p-4 shadow-3xs">
               <div className="flex justify-between items-center mb-3">
-                <h4 className="font-sans font-extrabold text-sm flex items-center gap-2">
-                  <Users size={16} />
+                <h4 className="font-sans font-extrabold text-xs flex items-center gap-2">
+                  <Users size={14} />
                   <span>รายชื่อนักศึกษา AMT</span>
                 </h4>
                 {/* Cohort filters */}
                 <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-neutral-500 font-sans">กรองตามรุ่น:</span>
+                  <span className="text-[10px] text-neutral-500 font-sans font-bold">กรองตามรุ่น:</span>
                   <select
                     id="studentBatchFilter"
                     value={filterBatch}
                     onChange={(e) => setFilterBatch(e.target.value)}
-                    className="border border-neutral-300 px-1 py-0.5 rounded text-[10px] font-mono bg-white font-bold"
+                    className="border border-neutral-350 px-1 py-0.5 rounded text-[10px] font-mono bg-white font-bold"
                   >
                     {batches.map(b => (
                       <option key={b} value={b}>{b === 'All' ? 'ทุกรุ่น' : `รุ่น ${b}`}</option>
@@ -612,19 +978,19 @@ export default function AdminPanel({
               <div className="overflow-x-auto max-h-96">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-neutral-50 text-[10px] text-neutral-550 border-b border-neutral-300 font-bold uppercase">
+                    <tr className="bg-neutral-50 text-[10px] text-neutral-500 border-b border-neutral-300 font-bold uppercase">
                       <th className="py-2 px-1">รูปถ่าย</th>
                       <th className="py-2 px-1">รหัสการช่าง</th>
                       <th className="py-2 px-1">ชื่อ-สกุล</th>
                       <th className="py-2 px-1">สถานะ</th>
-                      <th className="py-2 px-1 text-center font-sans">คีย์บัตรประจำตัว</th>
+                      <th className="py-2 px-1 text-center font-sans">เครื่องมือควบคุมบริหาร</th>
                     </tr>
                   </thead>
                   <tbody>
                     {users
                       .filter(u => u.role === 'นักศึกษา' && (filterBatch === 'All' || u.batch === filterBatch))
                       .map(student => (
-                        <tr key={student.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                        <tr key={student.id} className="border-b border-neutral-100 hover:bg-neutral-50 select-text">
                           <td className="py-2 px-1">
                             <img src={student.photoUrl} alt="img" className="w-8 h-10 object-cover border border-neutral-200 rounded shrink-0 cursor-pointer" onClick={() => onViewStudentCard(student)} title="คลิกเพื่อตรวจดูบัตรประจำตัว" referrerPolicy="no-referrer" />
                           </td>
@@ -638,23 +1004,58 @@ export default function AdminPanel({
                               disabled={false}
                               value={student.status}
                               onChange={(e) => onUpdateUserStatus(student.id, e.target.value as User['status'])}
-                              className="border px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-white text-neutral-800 cursor-pointer border-neutral-300 focus:outline-none focus:border-slate-800 focus:ring-1 focus:ring-slate-800"
+                              className="border px-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-white text-neutral-800 cursor-pointer border-neutral-300 focus:outline-none focus:border-slate-800"
                             >
-                              <option value="Pending">Pending (รออนุมัติ)</option>
-                              <option value="Active">Active (พร้อมใช้งาน)</option>
+                              <option value="Pending">Pending</option>
+                              <option value="Active">Active</option>
                               <option value="พ้นสภาพ">พ้นสภาพ</option>
                               <option value="พักการเรียน">พักการเรียน</option>
                               <option value="จบการศึกษา">จบการศึกษา</option>
                             </select>
-                            <span className="block text-[8px] text-emerald-600 font-sans mt-0.5 font-bold">✓ อนุญาตสิทธิ์ผู้ดูแลระบบ</span>
                           </td>
                           <td className="py-2 px-1 text-center">
-                            <button
-                              onClick={() => onViewStudentCard(student)}
-                              className="font-sans text-[9px] border border-neutral-900 hover:bg-neutral-950 hover:text-white px-2 py-1 rounded transition-colors cursor-pointer"
-                            >
-                              สร้างบัตร (แนวตั้ง)
-                            </button>
+                            <div className="flex justify-center items-center gap-1">
+                              <button
+                                onClick={() => onViewStudentCard(student)}
+                                className="font-sans text-[9px] border border-neutral-800 hover:bg-neutral-950 hover:text-white px-1.5 py-1 rounded transition-colors cursor-pointer"
+                              >
+                                บัตรช่าง
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingUser(student);
+                                  setShowAddUserForm(false);
+                                  window.scrollTo({ top: 410, behavior: 'smooth' });
+                                }}
+                                className="p-1 hover:bg-amber-100 text-amber-700 hover:text-amber-950 rounded transition-colors cursor-pointer border border-transparent hover:border-amber-300"
+                                title="แก้ไขผู้ใช้"
+                              >
+                                <Edit2 size={11} />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  Swal.fire({
+                                    title: 'ยืนยันการลบบัญชี?',
+                                    text: `คุณแน่ใจว่าต้องการถอนรากและลบประวัติของ ${student.firstName} ${student.lastName} หรือไม่?`,
+                                    icon: 'warning',
+                                    showCancelButton: true,
+                                    confirmButtonColor: '#e11d48',
+                                    cancelButtonColor: '#475569',
+                                    confirmButtonText: 'ใช่, ฉันมั่นใจที่จะลบ',
+                                    cancelButtonText: 'ยกเลิก'
+                                  }).then((result) => {
+                                    if (result.isConfirmed && onDeleteUser) {
+                                      onDeleteUser(student.id);
+                                      Swal.fire('ลบเรียบร้อย', 'ข้อมูลผู้ใช้เสร็จสิ้น', 'success');
+                                    }
+                                  });
+                                }}
+                                className="p-1 hover:bg-rose-100 text-rose-600 hover:text-rose-900 rounded transition-colors cursor-pointer border border-transparent hover:border-rose-300"
+                                title="ลบผู้ใช้"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -664,28 +1065,28 @@ export default function AdminPanel({
             </div>
 
             {/* STAFF / INSTRUCTORS LIST */}
-            <div className="bg-white border border-neutral-300 rounded-lg p-4 shadow-sm">
-              <h4 className="font-sans font-extrabold text-sm flex items-center gap-2 mb-3">
-                <UserCheck size={16} />
+            <div className="bg-white border border-neutral-250 rounded-xl p-4 shadow-3xs">
+              <h4 className="font-sans font-extrabold text-xs flex items-center gap-2 mb-3">
+                <UserCheck size={14} />
                 <span>รายชื่อบุคลากร / ครูวิทยากรการช่าง</span>
               </h4>
 
               <div className="overflow-x-auto max-h-96">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-neutral-50 text-[10px] text-neutral-550 border-b border-neutral-300 font-bold uppercase">
+                    <tr className="bg-neutral-50 text-[10px] text-neutral-505 border-b border-neutral-300 font-bold uppercase font-sans">
                       <th className="py-2 px-1">รูปถ่าย</th>
-                      <th className="py-2 px-1">รหัสประจำครู</th>
+                      <th className="py-2 px-1">รหัสประจำตำแหน่ง</th>
                       <th className="py-2 px-1">ชื่อ-สกุล / ตำแหน่งหลัก</th>
                       <th className="py-2 px-1">สถานะสิทธิ์</th>
-                      <th className="py-2 px-1 text-center">พิมพ์บัตรการช่าง</th>
+                      <th className="py-2 px-1 text-center">พิมพ์บัตร/เครื่องมือปรับแต่ง</th>
                     </tr>
                   </thead>
                   <tbody>
                     {users
                       .filter(u => u.role !== 'นักศึกษา' && u.role !== 'Admin')
                       .map(staff => (
-                        <tr key={staff.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                        <tr key={staff.id} className="border-b border-neutral-100 hover:bg-neutral-50 select-text">
                           <td className="py-2 px-1">
                             <img src={staff.photoUrl} alt="img" className="w-8 h-10 object-cover border border-neutral-200 rounded shrink-0 cursor-pointer" onClick={() => onViewStudentCard(staff)} referrerPolicy="no-referrer" />
                           </td>
@@ -695,25 +1096,61 @@ export default function AdminPanel({
                             <p className="text-[9px] font-mono text-neutral-600 font-bold uppercase">{staff.role}</p>
                             <p className="text-[9px] text-neutral-450">{staff.email}</p>
                           </td>
-                          <td className="py-2 px-1">
+                          <td className="py-2 px-1 font-sans">
                             <select
                               value={staff.status}
                               onChange={(e) => onUpdateUserStatus(staff.id, e.target.value as User['status'])}
-                              className="border px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-white text-neutral-800 cursor-pointer border-neutral-300 focus:outline-none focus:border-slate-800 focus:ring-1 focus:ring-slate-800 font-sans"
+                              className="border px-1 py-0.5 rounded text-[10px] font-sans font-medium bg-white text-neutral-800 cursor-pointer border-neutral-300 focus:outline-none focus:border-slate-800"
                             >
-                              <option value="Pending">Pending (รออนุมัติ)</option>
-                              <option value="Active">Active (พร้อมใช้งาน)</option>
+                              <option value="Pending">Pending</option>
+                              <option value="Active">Active</option>
                               <option value="พ้นสภาพ">พ้นสภาพ</option>
                               <option value="จบการศึกษา">จบการศึกษา</option>
                             </select>
                           </td>
                           <td className="py-2 px-1 text-center">
-                            <button
-                              onClick={() => onViewStudentCard(staff)}
-                              className="font-sans text-[9px] border border-neutral-900 hover:bg-neutral-950 hover:text-white px-2 py-1 rounded transition-colors cursor-pointer"
-                            >
-                              สร้างบัตร (แนวตั้ง)
-                            </button>
+                            <div className="flex justify-center items-center gap-1">
+                              <button
+                                onClick={() => onViewStudentCard(staff)}
+                                className="font-sans text-[9px] border border-neutral-800 hover:bg-neutral-950 hover:text-white px-1.5 py-1 rounded transition-colors cursor-pointer"
+                              >
+                                บัตรครู
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingUser(staff);
+                                  setShowAddUserForm(false);
+                                  window.scrollTo({ top: 410, behavior: 'smooth' });
+                                }}
+                                className="p-1 hover:bg-amber-100 text-amber-700 hover:text-amber-955 rounded transition-colors cursor-pointer border border-transparent hover:border-amber-300"
+                                title="แก้ไขสิทธิ์"
+                              >
+                                <Edit2 size={11} />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  Swal.fire({
+                                    title: 'ยืนยันนำชื่อครูหรือเจ้าหน้าที่ออก?',
+                                    text: `คุณแน่ใจว่าต้องการลบบัญชีและสิทธิ์ของ ${staff.firstName} หรือไม่?`,
+                                    icon: 'warning',
+                                    showCancelButton: true,
+                                    confirmButtonColor: '#e11d48',
+                                    cancelButtonColor: '#475569',
+                                    confirmButtonText: 'ลบทันที',
+                                    cancelButtonText: 'สละล้าง'
+                                  }).then((result) => {
+                                    if (result.isConfirmed && onDeleteUser) {
+                                      onDeleteUser(staff.id);
+                                      Swal.fire('ลบออกแล้ว', 'ยกเลิกสิทธิ์อย่างงดงาม', 'success');
+                                    }
+                                  });
+                                }}
+                                className="p-1 hover:bg-rose-100 text-rose-600 hover:text-rose-900 rounded transition-colors cursor-pointer border border-transparent hover:border-rose-300"
+                                title="ลบสิทธิ์สมาชิก"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1166,6 +1603,442 @@ export default function AdminPanel({
                 </p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Subtab content 5: EQUIPMENT INVENTORY */}
+      {subTab === 'equipment' && (
+        <div className="space-y-6 text-left">
+          {/* Header Command Bar */}
+          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h3 className="font-sans font-extrabold text-xs text-slate-900 flex items-center gap-2">
+                <Wrench size={14} className="text-[#0F172A]" />
+                <span>คลังและบัญชีอุปกรณ์เครื่องมือช่างอากาศยาน (Aviation Tools Registry)</span>
+              </h3>
+              <p className="text-[10px] text-slate-500 mt-0.5">พิจารณา บันทึกซีเรียลของเครื่องมือ วันที่ตรวจเทียบค่าเทียบมาตรฐาน (Calibration) และตำแหน่งชั้นวาง</p>
+            </div>
+            <button
+              onClick={() => setShowAddEquipmentForm(!showAddEquipmentForm)}
+              className="flex items-center gap-1 bg-slate-950 hover:bg-slate-800 text-white font-sans text-[10px] font-bold px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-95"
+            >
+              <Plus size={12} />
+              <span>{showAddEquipmentForm ? 'ซ่อนฟอร์ม' : 'เพิ่มเครื่องมือช่างใหม่'}</span>
+            </button>
+          </div>
+
+          {/* Form to Add Equipment */}
+          {showAddEquipmentForm && (
+            <div className="bg-slate-50 p-5 rounded-xl border border-slate-300 shadow-sm animate-fade-in space-y-4">
+              <h4 className="font-extrabold text-[11px] text-slate-900 uppercase tracking-wider font-mono">🔧 ลงทะเบียนเครื่องมือช่างอากาศยานเข้าระบบคลังคุมเสี่ยง</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">ชื่อเครื่องมือ (Tool Name) *</label>
+                  <input
+                    type="text"
+                    placeholder="เช่น Torque Wrench 150 In-lbs"
+                    value={newEqName}
+                    onChange={(e) => setNewEqName(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">Part Number *</label>
+                  <input
+                    type="text"
+                    placeholder="เช่น AMT-TW-01"
+                    value={newEqPart}
+                    onChange={(e) => setNewEqPart(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">Serial Number *</label>
+                  <input
+                    type="text"
+                    placeholder="เช่น SN-2026-98765"
+                    value={newEqSerial}
+                    onChange={(e) => setNewEqSerial(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">บาร์โค้ดสแกนด่วน (Quick Code ID) *</label>
+                  <input
+                    type="text"
+                    placeholder="เช่น EQ-8899"
+                    value={newEqCode}
+                    onChange={(e) => setNewEqCode(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">จำนวนคงคลัง (Quantity) *</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={newEqQty}
+                    onChange={(e) => setNewEqQty(parseInt(e.target.value) || 1)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">ตำแหน่งตรวจสอบจัดวาง *</label>
+                  <select
+                    value={newEqLocation}
+                    onChange={(e) => setNewEqLocation(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-905 font-sans cursor-pointer focus:outline-none"
+                  >
+                    <option value="Hangar Practical Area">Hangar Practical Area</option>
+                    <option value="Workshop 1 font-sans">Workshop 1</option>
+                    <option value="Workshop 2 font-sans">Workshop 2</option>
+                    <option value="Fiberglass Area font-sans">Fiberglass Area</option>
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-600 mb-1">หมายเหตุเพิ่มเติม (Remark/Calibration Info)</label>
+                  <input
+                    type="text"
+                    placeholder="วันที่สอบเทียบมาตรฐาน, เกณฑ์เสี่ยง, หรือประวัติเบิก"
+                    value={newEqRemark}
+                    onChange={(e) => setNewEqRemark(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddEquipmentForm(false)}
+                  className="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded-lg text-[10px]"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newEqName.trim() || !newEqPart.trim() || !newEqSerial.trim() || !newEqCode.trim()) {
+                      Swal.fire('กรอกข้อมูลไม่ครบ', 'ต้องระบุชื่อชิ้นงาน, Part No, Serial No และบาร์โค้ดตรวจสอบ', 'warning');
+                      return;
+                    }
+                    if (onAddEquipment) {
+                      onAddEquipment({
+                        no: String(equipment.length + 1),
+                        toolName: newEqName.trim(),
+                        partNumber: newEqPart.trim(),
+                        serialNumber: newEqSerial.trim(),
+                        code: newEqCode.trim().toUpperCase(),
+                        qty: newEqQty,
+                        location: newEqLocation,
+                        status: 'Ready',
+                        remark: newEqRemark.trim() || 'สอบเทียบตรงตามการอนุญาตสเตเชั่น'
+                      });
+                      setNewEqName('');
+                      setNewEqPart('');
+                      setNewEqSerial('');
+                      setNewEqCode('');
+                      setNewEqRemark('');
+                      setShowAddEquipmentForm(false);
+                    }
+                  }}
+                  className="px-4 py-1.5 bg-slate-950 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold"
+                >
+                  บันทึกเครื่องมือ
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Current Inventory Live Table List */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-3xs max-w-full overflow-x-auto">
+            <h4 className="font-extrabold text-xs text-slate-900 mb-3 flex items-center gap-1.5">
+              <Settings size={13} />
+              <span>รายการเครื่องมือทั้งหมดที่มีลิขสิทธิ์ประจำอู่ ({equipment.length} ชนิดรายการ)</span>
+            </h4>
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-[10px] text-slate-500 font-bold uppercase font-mono">
+                  <th className="py-2.5 px-2">ลำดับ</th>
+                  <th className="py-2.5 px-2">ชื่อชิ้นงานช่าง / ประเภทย่อย</th>
+                  <th className="py-2.5 px-2">Part No.</th>
+                  <th className="py-2.5 px-2">Serial / Code</th>
+                  <th className="py-2.5 px-2 text-center">คงคลัง (Qty)</th>
+                  <th className="py-2.5 px-2">ตำแหน่งห้อง</th>
+                  <th className="py-2.5 px-2">สถานะสิทธิ์</th>
+                  <th className="py-2.5 px-2 text-center">ควบคุมลบ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {equipment.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-slate-400">
+                      * ไม่มีข้อมูลเครื่องมือช่างในระบบคลังขณะนี้ กรุณาเปิดฟอร์มเพื่อบันทึกชิ้นงานแรก *
+                    </td>
+                  </tr>
+                ) : (
+                  equipment.map((eq, idx) => (
+                    <tr key={eq.code || idx} className="border-b border-slate-100 hover:bg-slate-50 font-sans select-text">
+                      <td className="py-2.5 px-2 font-mono text-slate-400">{idx + 1}</td>
+                      <td className="py-2.5 px-2 font-bold">
+                        <p className="text-slate-900">{eq.toolName}</p>
+                        <p className="text-[9px] text-slate-455 font-mono font-normal">{eq.remark}</p>
+                      </td>
+                      <td className="py-2.5 px-2 font-mono font-bold text-slate-600">{eq.partNumber}</td>
+                      <td className="py-2.5 px-2 font-mono text-slate-500">
+                        <span className="block text-[10px] text-slate-700">S/N: {eq.serialNumber}</span>
+                        <span className="block text-[9px] font-bold text-[#0F172A] bg-slate-100 px-1 rounded inline-block">Code: {eq.code}</span>
+                      </td>
+                      <td className="py-2.5 px-2 text-center font-mono font-bold text-slate-800">{eq.qty}</td>
+                      <td className="py-2.5 px-2 text-slate-650 font-medium">{eq.location}</td>
+                      <td className="py-2.5 px-2">
+                        <span className="px-2.5 py-0.5 rounded text-[9px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          {eq.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-2 text-center">
+                        <button
+                          onClick={() => {
+                            Swal.fire({
+                              title: 'จัดถอนเครื่องมือช่าง?',
+                              text: `คุณต้องการลบเครื่องมือระบบชื่อ "${eq.toolName}" ออกจากคลังถาวรหรือไม่?`,
+                              icon: 'warning',
+                              showCancelButton: true,
+                              confirmButtonColor: '#e11d48',
+                              confirmButtonText: 'ลบทิ้ง',
+                              cancelButtonText: 'ยกเลิก'
+                            }).then((res) => {
+                              if (res.isConfirmed && onDeleteEquipment) {
+                                onDeleteEquipment(eq.code);
+                              }
+                            });
+                          }}
+                          className="p-1 text-rose-600 hover:bg-rose-50 rounded border border-transparent hover:border-rose-300 transition-colors cursor-pointer"
+                          title="ลบเครื่องมือช่างอากาศยานนี้"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Subtab content 6: AVIONICS SYLLABUS & SCHEDULES */}
+      {subTab === 'schedules' && (
+        <div className="space-y-6 text-left">
+          {/* Header Command bar */}
+          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h3 className="font-sans font-extrabold text-xs text-slate-900 flex items-center gap-2">
+                <Calendar size={14} className="text-[#0F172A]" />
+                <span>ตารางวิชาเรียนและภาคปฏิบัติประจำรุ่น (Avionics Training & Syllabus Schedule)</span>
+              </h3>
+              <p className="text-[10px] text-slate-500 mt-0.5">จัดระเบียบบทเรียนภาคปฏิบัติสำหรับนักศึกษาเพื่อกำหนดตารางเรียนประจำสัปดาห์</p>
+            </div>
+            <button
+              onClick={() => setShowAddScheduleForm(!showAddScheduleForm)}
+              className="flex items-center gap-1 bg-slate-950 hover:bg-slate-800 text-white font-sans text-[10px] font-bold px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-95"
+            >
+              <Plus size={12} />
+              <span>{showAddScheduleForm ? 'ซ่อนฟอร์ม' : 'เพิ่มตารางเรียนและวิชาใหม่'}</span>
+            </button>
+          </div>
+
+          {/* Form to Add Schedule */}
+          {showAddScheduleForm && (
+            <div className="bg-slate-50 p-5 rounded-xl border border-slate-300 shadow-sm animate-fade-in space-y-4">
+              <h4 className="font-extrabold text-[11px] text-slate-905 uppercase tracking-wider font-mono">📅 กำหนดตารางกิจกรรมฝึกปฏิบัติวิชาการบิน</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-650 mb-1">กลุ่มเป้าหมายนักศึกษา (Batch) *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น 67 หรือ 66"
+                    value={newSchBatch}
+                    onChange={(e) => setNewSchBatch(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-650 mb-1">รหัสวิชา (Syllabus Code) *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น AMT-101"
+                    value={newSchSubjCode}
+                    onChange={(e) => setNewSchSubjCode(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-650 mb-1">ชื่อวิชาเรียนกักสิทธิ์ *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น Basic Aerodynamics Practical"
+                    value={newSchSubjName}
+                    onChange={(e) => setNewSchSubjName(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-650 mb-1">อาจารย์ผู้สอนประจำคาบ (Instructor) *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น Instructor Somchai"
+                    value={newSchInstructor}
+                    onChange={(e) => setNewSchInstructor(e.target.value)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-650 mb-1">วันประจำสัปดาห์ *</label>
+                  <select
+                    value={newSchDay}
+                    onChange={(e) => setNewSchDay(e.target.value as any)}
+                    className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-905 cursor-pointer focus:outline-none"
+                  >
+                    <option value="จันทร์">จันทร์</option>
+                    <option value="อังคาร">อังคาร</option>
+                    <option value="พุธ">พุธ</option>
+                    <option value="พฤหัสบดี">พฤหัสบดี</option>
+                    <option value="ศุกร์ font-sans">ศุกร์</option>
+                    <option value="เสาร์ font-sans">เสาร์</option>
+                    <option value="อาทิตย์ font-sans">อาทิตย์</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-650 mb-1">เวลาเริ่มเข้าปฏิบัติ (Start) *</label>
+                  <input
+                     type="text"
+                     placeholder="08:30"
+                     value={newSchStart}
+                     onChange={(e) => setNewSchStart(e.target.value)}
+                     className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-650 mb-1">เวลาปล่อยห้อง (End) *</label>
+                  <input
+                     type="text"
+                     placeholder="16:30"
+                     value={newSchEnd}
+                     onChange={(e) => setNewSchEnd(e.target.value)}
+                     className="w-full border border-slate-300 px-3 py-1.5 rounded bg-white text-slate-900 font-mono focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddScheduleForm(false)}
+                  className="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newSchBatch.trim() || !newSchSubjCode.trim() || !newSchSubjName.trim() || !newSchInstructor.trim()) {
+                      Swal.fire('ประมวลผลล้มเหลว', 'จำเป็นต้องระบุวิชาเรียนและรหัสกลุ่มผู้เรียนให้ครบถ้วนก่อนบันทึก', 'warning');
+                      return;
+                    }
+                    if (onAddSchedule) {
+                      onAddSchedule({
+                        id: `SCH-${Date.now()}`,
+                        batch: newSchBatch.trim(),
+                        subjectCode: newSchSubjCode.trim().toUpperCase(),
+                        subjectName: newSchSubjName.trim(),
+                        instructorName: newSchInstructor.trim(),
+                        dayOfWeek: newSchDay,
+                        startDate: newSchStart,
+                        endDate: newSchEnd
+                      });
+                      setNewSchBatch('');
+                      setNewSchSubjCode('');
+                      setNewSchSubjName('');
+                      setNewSchInstructor('');
+                      setShowAddScheduleForm(false);
+                    }
+                  }}
+                  className="px-4 py-1.5 bg-slate-950 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold"
+                >
+                  บันทึกตารางสอน
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Table display */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-3xs max-w-full overflow-x-auto">
+            <h4 className="font-extrabold text-xs text-slate-905 mb-3 flex items-center gap-1.5 font-sans">
+              <Calendar size={13} />
+              <span>ตารางบทเรียนและชั่วโมงการดูแลอากาศยานปัจจุบันทั้งหมด ({schedules.length} ชิ้นกิจกรรม)</span>
+            </h4>
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-205 text-[10px] text-slate-500 font-bold uppercase font-mono">
+                  <th className="py-2.5 px-2">กลุ่มรุ่น</th>
+                  <th className="py-2.5 px-2">วันเรียน</th>
+                  <th className="py-2.5 px-2 font-sans">รหัสวิชา</th>
+                  <th className="py-2.5 px-2 font-sans">ชื่อรายวิชา / สัมมนาเชิงลึก</th>
+                  <th className="py-2.5 px-2">ชั่วโมงเรียน (Time Slots)</th>
+                  <th className="py-2.5 px-2">อาจารย์วิทยากร (Instructor)</th>
+                  <th className="py-2.5 px-2 text-center">ปุ่มลบตาราง</th>
+                </tr>
+              </thead>
+              <tbody>
+                {schedules.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-slate-400 font-sans">
+                      * ไม่มีรายการตารางวิชาเรียนในระบบชั่วคราวกรุณาระบุกิจกรรมผ่านกล่องตรรกะใหม่ด้านบน *
+                    </td>
+                  </tr>
+                ) : (
+                  schedules.map((sch, idx) => (
+                    <tr key={sch.id || idx} className="border-b border-slate-100 hover:bg-slate-50 font-sans select-text">
+                      <td className="py-2 px-2 font-mono font-extrabold text-slate-600 bg-slate-50/50">รุ่น {sch.batch}</td>
+                      <td className="py-2 px-2 font-bold text-[#0F172A]">{sch.dayOfWeek}</td>
+                      <td className="py-2 px-2 font-mono text-xs font-bold text-emerald-700">{sch.subjectCode}</td>
+                      <td className="py-2 px-2 font-bold text-slate-900">{sch.subjectName}</td>
+                      <td className="py-2 px-2 font-mono font-medium text-slate-500 text-[10.5px]">
+                        {sch.startDate && sch.endDate ? `${sch.startDate} - ${sch.endDate}` : '-'}
+                      </td>
+                      <td className="py-2 px-2 text-slate-700 font-medium">{sch.instructorName}</td>
+                      <td className="py-2 px-2 text-center">
+                        <button
+                          onClick={() => {
+                            Swal.fire({
+                              title: 'จัดถอนตารางสิทธิ์บทเรียน?',
+                              text: `คุณพึงปรารถนาต้องการลบตารางวิชา ${sch.subjectName} ของรุ่น ${sch.batch} หรือไม่?`,
+                              icon: 'warning',
+                              showCancelButton: true,
+                              confirmButtonColor: '#e11d48',
+                              confirmButtonText: 'ลบทิ้ง'
+                            }).then((res) => {
+                              if (res.isConfirmed && onDeleteSchedule) {
+                                onDeleteSchedule(sch.id);
+                              }
+                            });
+                          }}
+                          className="p-1 text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-300 rounded transition-colors cursor-pointer"
+                          title="ลบวิชานี้ออกจากตาราง"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

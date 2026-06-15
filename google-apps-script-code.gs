@@ -18,7 +18,7 @@ const SPREADSHEET_ID = "1KjqOtBAEdENi7Dwgm3hyWJGZbdfZUkxg24vkhugVV4I";
 
 // รายชื่อชีตและหัวข้อหลัก
 const SHEETS_CONFIG = {
-  "Users": ["id", "photoUrl", "firstName", "lastName", "role", "signature", "email", "status", "createdAt", "batch"],
+  "Users": ["id", "photoUrl", "firstName", "lastName", "role", "signature", "email", "status", "createdAt", "batch", "password"],
   "RoomRequests": ["id", "date", "requesterId", "requesterName", "requesterRole", "room", "purpose", "maintenanceApproved", "isRoomUsageRecordCreated"],
   "RoomUsageRecords": ["id", "date", "room", "requesterName", "requesterRole", "report", "maintenanceOfficerId", "maintenanceOfficerStatus"],
   "Equipment": ["no", "toolName", "partNumber", "serialNumber", "code", "qty", "location", "status", "remark", "calibrationDate"],

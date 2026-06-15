@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { User, RoomRequest, RoomUsageRecord, Equipment, BorrowRecord, ClassSchedule, ExamSchedule, ExamGrade } from './types';
-import { APIService, getAppOriginForQR } from './lib/api';
+import { APIService, getAppOriginForQR, pullFromGoogleSheets, mergeDatabases, syncWithGoogleSheets, saveLocalStorageState } from './lib/api';
 import RegistrationForms from './components/RegistrationForms';
 import AdminPanel from './components/AdminPanel';
 import TrainingManagerPanel from './components/TrainingManagerPanel';
@@ -27,6 +27,57 @@ export default function App() {
 
   // App navigation state: 'home' | 'dashboard' | 'register'
   const [currentScreen, setCurrentScreen] = useState<'home' | 'dashboard' | 'register'>('home');
+
+  // Initial Sync loading splash screen states
+  const [isInitialSyncing, setIsInitialSyncing] = useState(true);
+  const [syncStatusText, setSyncStatusText] = useState('กำลังเชื่อมโยงโครงข่ายและประสานข้อมูล...');
+  const [showOfflineBtn, setShowOfflineBtn] = useState(false);
+
+  // Automatically pull and merge data from Google Sheets when the app mounts/loads (blocking)
+  useEffect(() => {
+    let active = true;
+    const backupTimer = setTimeout(() => {
+      if (active) setShowOfflineBtn(true);
+    }, 4000); // Show "Offline Override" after 4 seconds of pull delay
+
+    const autoPullDataOnMount = async () => {
+      try {
+        setSyncStatusText('กำลังตรวจสอบสิทธิ์การเชื่อมต่อคลาวด์วิทยาลัยถลาง...');
+        const fetchedData = await pullFromGoogleSheets();
+        if (!active) return;
+
+        if (fetchedData && typeof fetchedData === 'object') {
+          setSyncStatusText('ดาวน์โหลดเรียบร้อย! กำลังประมวลผลและผสานฐานข้อมูล (Users, Rooms, Equipment)...');
+          const currentDb = APIService.getDb();
+          const mergedDb = mergeDatabases(currentDb, fetchedData);
+          APIService.saveDb(mergedDb);
+          setDb(mergedDb);
+          setSyncStatusText(`การประสานเสร็จสมบูรณ์! ตรวจพบบัญชีผู้ใช้ ${mergedDb.users.length} รายการ`);
+          setTimeout(() => {
+            if (active) setIsInitialSyncing(false);
+          }, 800);
+        } else {
+          setSyncStatusText('ฐานข้อมูล Google Sheets ออฟไลน์หรือยังไม่ได้รับการเปิดสิทธิ์ จะสลับไปใช้แคชภายใน...');
+          setTimeout(() => {
+            if (active) setIsInitialSyncing(false);
+          }, 1200);
+        }
+      } catch (e) {
+        console.warn('Background auto-pull sheets error:', e);
+        if (active) {
+          setSyncStatusText('ระบบเชื่อมต่อล้มเหลว จะเริ่มรันระบบในโหมดทำงานออฟไลน์จำลอง...');
+          setTimeout(() => {
+            if (active) setIsInitialSyncing(false);
+          }, 1200);
+        }
+      }
+    };
+    autoPullDataOnMount();
+    return () => {
+      active = false;
+      clearTimeout(backupTimer);
+    };
+  }, []);
 
   // Input states for login screen
   const [loginId, setLoginId] = useState('');
@@ -224,7 +275,7 @@ export default function App() {
     };
   }, [isLoginCameraActive, loginMethod, loginCameraFacingMode]);
 
-  const handleQRLoginSubmit = (qrData: string) => {
+  const handleQRLoginSubmit = async (qrData: string) => {
     const cleanQR = qrData.trim();
     let parsedId = '';
 
@@ -292,7 +343,32 @@ export default function App() {
     // Trim and clean possible enclosing quotes
     parsedId = parsedId.trim().replace(/^['"\[\]]|['"\[\]]$/g, '').trim();
 
-    const found = db.users.find(u => {
+    Swal.fire({
+      title: 'กำลังตรวจสอบคิวอาร์รหัสสิทธิ์...',
+      text: 'ดาวน์โหลดใบอนุมัติล่าสุดจากระบบ Google Sheets',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      }
+    });
+
+    let currentUsersList = db.users;
+    try {
+      const fetchedData = await pullFromGoogleSheets();
+      if (fetchedData && typeof fetchedData === 'object') {
+        const currentDb = APIService.getDb();
+        const mergedDb = mergeDatabases(currentDb, fetchedData);
+        APIService.saveDb(mergedDb);
+        setDb(mergedDb);
+        currentUsersList = mergedDb.users;
+      }
+    } catch (syncErr) {
+      console.warn('Sync at QR login failed, proceeding with local db fallback:', syncErr);
+    } finally {
+      Swal.close();
+    }
+
+    const found = currentUsersList.find(u => {
       const uIdClean = u.id.trim().toLowerCase();
       const scannedIdClean = parsedId.toLowerCase();
       return uIdClean === scannedIdClean || uIdClean === scannedIdClean.replace(/\D/g, '') || scannedIdClean === uIdClean.replace(/\D/g, '');
@@ -415,14 +491,86 @@ export default function App() {
   }, []);
 
   // Update central state and auto-save
-  const updateDb = (newDb: typeof db) => {
+  const updateDb = async (
+    newDb: typeof db,
+    customSuccessTitle?: string,
+    customSuccessText?: string
+  ) => {
+    // 1. Immediately update React state for UI responsiveness
     setDb(newDb);
-    APIService.saveDb(newDb);
+
+    // 2. Persist to localStorage
+    saveLocalStorageState(newDb);
+
+    // 3. Show SweetAlert Loading indication for instant Force Sync feedback
+    Swal.fire({
+      title: 'กำลังประสานฝากความปลอดภัย (Force Sync)...',
+      text: 'ระบบกำลังรวบรวมประวัติความช่างและซิงโครไนซ์ขึ้นสเปรดชีต Google Sheets ทันที',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      }
+    });
+
+    try {
+      // 4. Force synchronous network synchronisation with Google Sheets API
+      const success = await syncWithGoogleSheets(newDb);
+      Swal.close();
+
+      if (success) {
+        Swal.fire({
+          icon: 'success',
+          title: customSuccessTitle || 'ประสานคลาวด์ชีตสำเร็จ (Sync Success)',
+          text: customSuccessText || 'ข้อมูลและประวัติการทำรายการล่าสุดบันทึกขึ้นสเปรดชีต Google Sheet ทันทีเรียบร้อยแล้ว (Force Sync OK)',
+          confirmButtonColor: '#0F172A',
+          timer: 2500
+        });
+      } else {
+        Swal.fire({
+          icon: 'warning',
+          title: 'บันทึกสำเร็จทางออฟไลน์',
+          text: 'ระบบเก็บสำรองฐานข้อมูลเสร็จสิ้นในบราวเซอร์แล้ว แต่การต่อรับเชื่อมคลาวด์ชีตล้มเหลวชั่วคราว โปรดตรวจสอบการรับสิทธิ์ API',
+          confirmButtonColor: '#0F172A'
+        });
+      }
+    } catch (err) {
+      console.warn('Force sync connection err:', err);
+      Swal.close();
+      Swal.fire({
+        icon: 'warning',
+        title: 'ทำรายการสำเร็จ (แคชจำลอง)',
+        text: 'ประวัติชิ้นส่วนและรายการใช้งานจัดเก็บภายในตัวเครื่องแล้ว แต่ไม่สามารถซิงโครไนซ์ขึ้น Google Sheets ได้',
+        confirmButtonColor: '#0F172A'
+      });
+    }
   };
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const idClean = loginId.trim();
+
+    Swal.fire({
+      title: 'กำลังตรวจสอบสิทธิ์และดึงข้อมูลประสานงาน...',
+      text: 'ดาวน์โหลดข้อมูลล่าสุดจาก Google Sheets โรงเรียนช่างการบินชลบุรี',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      }
+    });
+
+    try {
+      const fetchedData = await pullFromGoogleSheets();
+      if (fetchedData && typeof fetchedData === 'object') {
+        const currentDb = APIService.getDb();
+        const mergedDb = mergeDatabases(currentDb, fetchedData);
+        APIService.saveDb(mergedDb);
+        setDb(mergedDb);
+      }
+    } catch (syncErr) {
+      console.warn('Sync at login failed, proceeding with local db fallback:', syncErr);
+    } finally {
+      Swal.close();
+    }
 
     // 1. Admin bypass check
     if (idClean.toLowerCase() === 'admin' && loginPassword === 'admin1234') {
@@ -472,27 +620,74 @@ export default function App() {
     }
   };
 
-  const handleRegisterSuccess = (candidate: Omit<User, 'status' | 'createdAt'>) => {
-    const res = APIService.register(candidate);
-    if (res.success) {
-      setDb(APIService.getDb()); // reload from disk helper
-      Swal.fire({
-        icon: 'success',
-        title: 'ยื่นใบลงทะเบียนสำเร็จ',
-        text: res.message,
-        confirmButtonColor: '#171717'
-      });
-      setCurrentScreen('home');
-      setLoginId('');
-      setLoginPassword('');
-    } else {
+  const handleRegisterSuccess = async (candidate: Omit<User, 'status' | 'createdAt'>) => {
+    const cleanId = candidate.id.trim();
+    const exists = db.users.some(u => u.id.toLowerCase() === cleanId.toLowerCase());
+    if (exists) {
       Swal.fire({
         icon: 'error',
         title: 'ลงทะเบียนติดขัด',
-        text: res.message,
+        text: 'รหัสประจำตัวนี้มีอยู่ในระบบแล้ว ไม่สามารถลงทะเบียนซ้ำได้',
+        confirmButtonColor: '#171717'
+      });
+      return;
+    }
+
+    const newUser: User = {
+      ...candidate,
+      id: cleanId,
+      status: 'Pending',
+      createdAt: new Date().toLocaleDateString('th-TH', { year: 'numeric', month: '2-digit', day: '2-digit' }),
+    };
+
+    const nextDb = { ...db, users: [...db.users, newUser] };
+
+    // Update React state and write locally
+    setDb(nextDb);
+    saveLocalStorageState(nextDb);
+
+    // Show immediate loading
+    Swal.fire({
+      title: 'กำลังเชื่อมโยงและส่งใบสมัคร (Force Sync)...',
+      text: 'ระบบกำลังจัดส่งรหัสบัญชีใหม่ของคุณขึ้นคลาวด์ชีตสำรองทันที',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      }
+    });
+
+    try {
+      const success = await syncWithGoogleSheets(nextDb);
+      Swal.close();
+      if (success) {
+        Swal.fire({
+          icon: 'success',
+          title: 'ยื่นใบลงทะเบียนสำเร็จ (Force Sync OK)',
+          text: 'ลงทะเบียนสำเร็จและสมุดรายชื่อได้รับการอัปเดตสเปรดชีต Google Sheets เรียบร้อยแล้ว! กรุณารอผู้ดูแลอนุมัติสิทธิ์การพอร์ทัล',
+          confirmButtonColor: '#171717'
+        });
+      } else {
+        Swal.fire({
+          icon: 'warning',
+          title: 'สมัครสำเร็จ (ออฟไลน์)',
+          text: 'ยื่นลงสมัครเข้าสิทธิ์เครื่องเรียบร้อยแล้ว แต่ออฟไลน์จากการผสาน Google Sheets',
+          confirmButtonColor: '#171717'
+        });
+      }
+    } catch (err) {
+      console.warn('Register sync failed:', err);
+      Swal.close();
+      Swal.fire({
+        icon: 'warning',
+        title: 'ยืนสมัครสำเร็จในระบบแคชชั่วคราว',
+        text: 'โปรดแจ้งให้ผู้ดูแลรับเรื่องเนื่องจากระบบติดต่อเครือข่ายล้มเหลว',
         confirmButtonColor: '#171717'
       });
     }
+
+    setCurrentScreen('home');
+    setLoginId('');
+    setLoginPassword('');
   };
 
   const handleLogout = () => {
@@ -534,14 +729,12 @@ export default function App() {
   // --- ACTIONS FOR ADMIN ---
   const handleApproveUser = (userId: string) => {
     const nextUsers = db.users.map(u => u.id === userId ? { ...u, status: 'Active' as const } : u);
-    updateDb({ ...db, users: nextUsers });
-    Swal.fire('อนุมัติแล้ว', `อนุมัติสิทธิ์ความปลอดภัยผู้ใช้นี้เรียบร้อย`, 'success');
+    updateDb({ ...db, users: nextUsers }, 'อนุมัติสิทธิ์สำเร็จ', 'อนุมัติสิทธิ์เข้าใช้งานความปลอดภัยและการตรวจสอบระบบเรียบร้อย');
   };
 
   const handleRejectUser = (userId: string) => {
     const nextUsers = db.users.filter(u => u.id !== userId);
-    updateDb({ ...db, users: nextUsers });
-    Swal.fire('ปฏิเสธคำขอสำเร็จ', 'นำผู้ใช้งานออกจากบัญชีคิวคำขอลงทะเบียนแล้ว', 'info');
+    updateDb({ ...db, users: nextUsers }, 'ปฏิเสธและลบสิทธิ์เรียบร้อย', 'นำคำขอลงทะเบียนออกจากคิวระบบความปลอดภัยเรียบร้อยแล้ว');
   };
 
   const handleUpdateStudentStatus = (userId: string, newStatus: User['status']) => {
@@ -555,8 +748,28 @@ export default function App() {
         ? { ...r, maintenanceOfficerStatus: (r.maintenanceOfficerStatus === 'Acknowledged' ? 'Pending' : 'Acknowledged') as any } 
         : r
     );
-    updateDb({ ...db, roomUsageRecords: nextRecords });
-    Swal.fire('อัปเดตบันทึกห้องสำเร็จ', 'เปลี่ยนสถานภาพยอมรับลายเซ็นสมุดส่งตรวจเสร็จสิ้น', 'success');
+    updateDb({ ...db, roomUsageRecords: nextRecords }, 'ปรับปรุงสถานะสมุดตรวจห้องเสร็จสิ้น', 'เปลี่ยนสถานภาพตอบรับข้อมูลลายเซ็นในระบบแม่เรียบร้อย');
+  };
+
+  // --- ACTIONS FOR COMPLETE ADMIN USER MANAGEMENT ---
+  const handleAddNewUserDirect = (newUser: User) => {
+    const exists = db.users.some(u => u.id.toLowerCase().trim() === newUser.id.toLowerCase().trim());
+    if (exists) {
+      Swal.fire('พบข้อมููลซ้ำ', `รหัสผู้ใช้ ${newUser.id} ลงทะเบียนในระบบความปลอดภัยแล้ว`, 'error');
+      return;
+    }
+    const nextUsers = [...db.users, newUser];
+    updateDb({ ...db, users: nextUsers }, 'บันทึกผู้ใช้สำเร็จ', `เพิ่มระเบียบบัญชีของ ${newUser.firstName} ${newUser.lastName} สำเร็จ`);
+  };
+
+  const handleUpdateUserDirect = (updatedUser: User) => {
+    const nextUsers = db.users.map(u => u.id === updatedUser.id ? updatedUser : u);
+    updateDb({ ...db, users: nextUsers }, 'แก้ไขข้อมูลผู้ใช้สำเร็จ', `ปรับปรุงคุณสมบัติของ ${updatedUser.firstName} ในระบบสมบูรณ์`);
+  };
+
+  const handleDeleteUserDirect = (userId: string) => {
+    const nextUsers = db.users.filter(u => u.id !== userId);
+    updateDb({ ...db, users: nextUsers }, 'ลบผู้ใช้สำเร็จ', 'ลบผู้ใช้นี้ออกจากระบบสารสนเทศคลาวด์ชีตเรียบร้อย');
   };
 
   // --- ACTIONS FOR TRAINING STAFF/MANAGER ---
@@ -581,8 +794,7 @@ export default function App() {
 
   const handleUpdateStudentStatusByStaff = (studentId: string, status: User['status']) => {
     const nextUsers = db.users.map(u => u.id === studentId ? { ...u, status } : u);
-    updateDb({ ...db, users: nextUsers });
-    Swal.fire('สำเร็จ', 'ส่งข้อเสนอเปลี่ยนแปลงสถานะนักศึกษาเข้าสู่ระบบบริหารพิจารณาแล้ว', 'success');
+    updateDb({ ...db, users: nextUsers }, 'ยื่นเปลี่ยนแปลงสถานภาพสำเร็จ', 'จัดส่งประวัติการร้องเรียนเรื่องสถานะนักศึกษาเรียบร้อย');
   };
 
   const handleApproveStudentStatusByManager = (studentId: string) => {
@@ -745,6 +957,53 @@ export default function App() {
       borrowRecords: nextBorrowRecords
     });
   };
+
+  if (isInitialSyncing) {
+    return (
+      <div className="min-h-screen bg-[#0F172A] flex flex-col items-center justify-center text-slate-100 p-6 select-none font-sans">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl flex flex-col items-center text-center space-y-6 animate-fade-in text-xs font-sans">
+          <div className="p-3.5 bg-slate-800 text-emerald-400 rounded-2xl border border-slate-700 shadow-lg animate-pulse">
+            <HardHat size={36} />
+          </div>
+          
+          <div className="space-y-1">
+            <h1 className="font-sans font-extrabold text-2xl tracking-widest text-white">AMT CONNECT</h1>
+            <p className="text-[10px] text-slate-450 uppercase tracking-widest font-semibold font-mono">Aircraft Maintenance & Exam Portal • Thalang</p>
+          </div>
+
+          <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden relative">
+            <div className="absolute top-0 left-0 h-full bg-emerald-500 rounded-full animate-pulse" style={{ width: '100%' }}></div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-center gap-2 text-xs text-emerald-400 font-bold">
+              <RefreshCw size={13} className="animate-spin" />
+              <span>ซิงโครไนซ์ฐานข้อมูลหลัก (Google Sheets)</span>
+            </div>
+            <p className="text-xs text-slate-300 px-2 min-h-12 leading-normal">
+              {syncStatusText}
+            </p>
+          </div>
+
+          <div className="pt-4 border-t border-slate-800 w-full flex flex-col gap-2 items-center">
+            <span className="text-[9px] text-slate-500 tracking-wider font-mono">
+              SYSTEM STATE: SYNC_ON_MOUNT_LOADER
+            </span>
+            {showOfflineBtn && (
+              <button
+                type="button"
+                onClick={() => setIsInitialSyncing(false)}
+                className="mt-2 w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg border border-slate-700 transition-all active:scale-95 text-[11px] font-bold cursor-pointer"
+              >
+                เข้าใช้งานทันที (ใช้ออฟไลน์แคชในเครื่อง)
+              </button>
+            )}
+          </div>
+        </div>
+        <p className="mt-6 text-[10px] text-slate-500 font-mono">AMT CONNECT PORTAL © 2026 • THALANG TECHNICAL COLLEGE</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-between font-sans selection:bg-slate-900 selection:text-white no-print">
@@ -1090,6 +1349,8 @@ export default function App() {
                 roomRequests={db.roomRequests}
                 roomUsageRecords={db.roomUsageRecords}
                 borrowRecords={db.borrowRecords}
+                equipment={db.equipment}
+                schedules={db.schedules}
                 onApproveUser={handleApproveUser}
                 onRejectUser={handleRejectUser}
                 onUpdateUserStatus={handleUpdateStudentStatus}
@@ -1098,6 +1359,13 @@ export default function App() {
                 onViewRequestDoc={(req) => setActiveRequestDoc(req)}
                 onPrintUsageRecords={() => setShowUsageRecordDoc(true)}
                 onReloadDb={() => setDb(APIService.getDb())}
+                onAddUser={handleAddNewUserDirect}
+                onUpdateUser={handleUpdateUserDirect}
+                onDeleteUser={handleDeleteUserDirect}
+                onAddEquipment={(eq) => { const next = [...db.equipment, eq]; updateDb({ ...db, equipment: next }, 'เพิ่มเครื่องมือช่างสำเร็จ', `บันทึก "${eq.toolName}" ลงสู่ระบบคลังชิ้นส่วน และจัดส่งข้อมูลประสานงานทันที (Force Sync OK)`); }}
+                onDeleteEquipment={(code) => { const next = db.equipment.filter(e => e.code !== code); updateDb({ ...db, equipment: next }, 'ถอดถอนเครื่องมือสำเร็จ', 'ลบเครื่องมือระบบเรียบร้อยพร้อมซิงโครไนซ์ขึ้นสเปรดชีตทันที (Force Sync OK)'); }}
+                onAddSchedule={(sch) => { const next = [...db.schedules, sch]; updateDb({ ...db, schedules: next }, 'เพิ่มตารางการเรียนสอนสำเร็จ', `บันทึกวิชา "${sch.subjectName}" รหัสกลุ่มรุ่นเรียนเรียบร้อย และประสานขึ้น Google Sheets ทันที (Force Sync OK)`); }}
+                onDeleteSchedule={(id) => { const next = db.schedules.filter(s => s.id !== id); updateDb({ ...db, schedules: next }, 'ถอนตารางกลุ่มเรียนสำเร็จ', 'ปรับกลุ่มและลบตารางเวลาออกจากระเบียนสมบูรณ์ (Force Sync OK)'); }}
               />
             ) : currentUser.role === 'Training Manager' || currentUser.role === 'Training Staff' ? (
               <TrainingManagerPanel

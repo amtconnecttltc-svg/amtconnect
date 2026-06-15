@@ -402,3 +402,134 @@ export function getAppOriginForQR(): string {
   
   return origin;
 }
+
+/**
+ * Merges local database with pulled Google Sheet datastore records cleanly.
+ * Prevents newer local registrations and credentials from being wiped out by blank sheets or delayed sync queues.
+ */
+export function mergeDatabases(
+  localDb: ReturnType<typeof getLocalStorageState>,
+  remoteDb: any
+): ReturnType<typeof getLocalStorageState> {
+  if (!remoteDb || typeof remoteDb !== 'object') return localDb;
+
+  // Helper to merge arrays with unique ID (case insensitive matching)
+  const mergeArrayById = <T extends { id: string }>(local: T[], remote: T[]): T[] => {
+    if (!remote || !Array.isArray(remote)) return local;
+    const merged = [...remote];
+    local.forEach(lItem => {
+      if (!lItem || !lItem.id) return;
+      const exists = merged.some(rItem => rItem && rItem.id && String(rItem.id).toLowerCase().trim() === String(lItem.id).toLowerCase().trim());
+      if (!exists) {
+        merged.push(lItem);
+      } else {
+        // Find existing and merge properties, preserving local properties if remote is missing them
+        const idx = merged.findIndex(rItem => rItem && rItem.id && String(rItem.id).toLowerCase().trim() === String(lItem.id).toLowerCase().trim());
+        if (idx !== -1) {
+          const remoteItem = merged[idx];
+          const safeItem = { ...lItem };
+          Object.keys(remoteItem).forEach(key => {
+            const rawVal = (remoteItem as any)[key];
+            if (rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== "") {
+              (safeItem as any)[key] = rawVal;
+            }
+          });
+          merged[idx] = safeItem;
+        }
+      }
+    });
+    return merged;
+  };
+
+  const mergedUsers = (): User[] => {
+    const remoteUsers = remoteDb.users;
+    if (!remoteUsers || !Array.isArray(remoteUsers)) return localDb.users;
+    
+    // Filter out invalid items from remote list before continuing
+    const cleanRemoteUsers = remoteUsers.filter(u => u && u.id);
+    const merged = [...cleanRemoteUsers];
+    
+    // Ensure Admin is always there
+    const hasAdmin = merged.some(u => u && u.id && u.id.toLowerCase().trim() === 'admin');
+    if (!hasAdmin) {
+      const localAdmin = localDb.users.find(u => u && u.id && u.id.toLowerCase().trim() === 'admin');
+      if (localAdmin) {
+        merged.unshift(localAdmin);
+      } else {
+        merged.unshift({
+          id: 'ADMIN',
+          photoUrl: 'https://images.unsplash.com/photo-1540569014015-19a7be504e3a?w=150',
+          firstName: 'Admin',
+          lastName: 'System',
+          role: 'Admin',
+          signature: 'SYSTEM_ADMIN_PASS',
+          email: 'admin@amtconnect.com',
+          status: 'Active',
+          createdAt: '2026-01-01',
+        });
+      }
+    }
+
+    localDb.users.forEach(lUser => {
+      if (!lUser || !lUser.id) return;
+      const exists = merged.some(rUser => rUser && rUser.id && rUser.id.toLowerCase().trim() === lUser.id.toLowerCase().trim());
+      if (!exists) {
+        merged.push(lUser);
+      } else {
+        const idx = merged.findIndex(rUser => rUser && rUser.id && rUser.id.toLowerCase().trim() === lUser.id.toLowerCase().trim());
+        if (idx !== -1) {
+          const remoteUser = merged[idx] || {};
+          const safeUser: User = {
+            ...lUser,
+            firstName: (remoteUser.firstName && String(remoteUser.firstName).trim() !== "") ? remoteUser.firstName.trim() : lUser.firstName,
+            lastName: (remoteUser.lastName && String(remoteUser.lastName).trim() !== "") ? remoteUser.lastName.trim() : lUser.lastName,
+            email: (remoteUser.email && String(remoteUser.email).trim() !== "") ? remoteUser.email.trim() : lUser.email,
+            role: remoteUser.role || lUser.role,
+            batch: remoteUser.batch || lUser.batch,
+            status: remoteUser.status || lUser.status,
+            password: remoteUser.password || lUser.password,
+            photoUrl: remoteUser.photoUrl || lUser.photoUrl,
+            signature: remoteUser.signature || lUser.signature,
+            createdAt: remoteUser.createdAt || lUser.createdAt,
+          };
+          merged[idx] = safeUser;
+        }
+      }
+    });
+
+    return merged;
+  };
+
+  const mergeEquipment = (local: Equipment[], remote: Equipment[]): Equipment[] => {
+    if (!remote || !Array.isArray(remote)) return local;
+    const merged = [...remote];
+    local.forEach(l => {
+      if (!l) return;
+      const exists = merged.some(r => r && (r.code === l.code || r.no === l.no));
+      if (!exists) {
+        merged.push(l);
+      } else {
+        const idx = merged.findIndex(r => r && (r.code === l.code || r.no === l.no));
+        if (idx !== -1) {
+          merged[idx] = {
+            ...l,
+            ...merged[idx],
+          };
+        }
+      }
+    });
+    return merged;
+  };
+
+  return {
+    users: mergedUsers(),
+    roomRequests: mergeArrayById(localDb.roomRequests || [], remoteDb.roomRequests || []),
+    roomUsageRecords: mergeArrayById(localDb.roomUsageRecords || [], remoteDb.roomUsageRecords || []),
+    equipment: mergeEquipment(localDb.equipment || [], remoteDb.equipment || []),
+    borrowRecords: mergeArrayById(localDb.borrowRecords || [], remoteDb.borrowRecords || []),
+    schedules: mergeArrayById(localDb.schedules || [], remoteDb.schedules || []),
+    examSchedules: mergeArrayById(localDb.examSchedules || [], remoteDb.examSchedules || []),
+    examGrades: mergeArrayById(localDb.examGrades || [], remoteDb.examGrades || []),
+  };
+}
+

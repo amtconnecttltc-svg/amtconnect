@@ -8,6 +8,7 @@ import { User, UserRole } from '../types';
 import SignaturePad from './SignaturePad';
 import { UserPlus, Image as ImageIcon, Key, Mail, UserCheck, ShieldAlert } from 'lucide-react';
 import Swal from 'sweetalert2';
+import { compressImage } from '../lib/api';
 
 interface RegistrationFormsProps {
   onRegisterSuccess: (user: Omit<User, 'status' | 'createdAt'>) => void;
@@ -32,19 +33,38 @@ export default function RegistrationForms({ onRegisterSuccess, onCancel, existin
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 1024 * 1024) {
+    if (file.size > 15 * 1024 * 1024) {
       Swal.fire({
         icon: 'warning',
         title: 'รูปภาพมีขนาดใหญ่เกินไป',
-        text: 'กรุณาอัพโหลดรูปภาพขนาดไม่เกิน 1MB เพื่อลดการใช้ข้อมูลและทำให้การโหลดหน้าบอร์ดเสถียร',
+        text: 'กรุณาอัพโหลดรูปภาพขนาดไม่เกิน 15MB',
         confirmButtonColor: '#171717'
       });
       return;
     }
 
+    Swal.fire({
+      title: 'กำลังบีบอัดและวิเคราะห์รูปถ่ายช่าง...',
+      text: 'ระบบกำลังปรับความละเอียดภาพให้เล็กลงเพื่อให้เปิดได้เร็วขึ้นบนระบบคลาวด์',
+      allowOutsideClick: false,
+      didOpen: () => {
+        Swal.showLoading();
+      }
+    });
+
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setPhotoUrl(reader.result as string);
+    reader.onloadend = async () => {
+      try {
+        const rawBase64 = reader.result as string;
+        // Compress image to 130x160 with 0.70 compression quality
+        const compressed = await compressImage(rawBase64, 130, 160, 0.70);
+        setPhotoUrl(compressed);
+        Swal.close();
+      } catch (err) {
+        console.warn('Compression error, falling back to original:', err);
+        setPhotoUrl(reader.result as string);
+        Swal.close();
+      }
     };
     reader.readAsDataURL(file);
   };
